@@ -31,6 +31,21 @@ data class Book (
     val createdAt: Long = System.currentTimeMillis(),
     val dirty: Boolean = false
 ) {
+    // Build a URL when have a coverID
     val coverUrl: String?
         get() = coverId.let { "https://covers.openlibrary.org/b/id/${it}-S.jpg" }
+
+    // Placeholder used by UI (e.g., tablet details pane)
+    companion object {
+        val EMPTY = Book(
+            id = "",
+            title = "",
+            author = "",
+            year = "",
+            coverId = null,
+            photoUri = null,
+            createdAt = System.currentTimeMillis(),
+            dirty = false
+        )
+    }
 }
