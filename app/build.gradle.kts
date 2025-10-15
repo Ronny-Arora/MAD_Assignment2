@@ -57,6 +57,9 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.google.android.material:material:1.12.0")
 
+    // DataStore dependency
+    implementation("androidx.datastore:datastore-preferences:1.1.1") 
+
     // Retrofit + Moshi
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
