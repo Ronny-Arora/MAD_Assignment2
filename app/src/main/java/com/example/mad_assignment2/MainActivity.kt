@@ -1,99 +1,317 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.example.mad_assignment2
 
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import com.example.mad_assignment2.data.model.Book
-import com.example.mad_assignment2.ui.BookViewModel
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.runtime.collectAsState
-import androidx.compose.ui.Alignment
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.foundation.lazy.itemsIndexed
-import kotlinx.coroutines.flow.distinctUntilChanged
-import android.content.res.Configuration
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.AssistChip
-
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow   // <-- correct package for snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import com.example.mad_assignment2.auth.AuthViewModel
+import com.example.mad_assignment2.data.model.Book
+import com.example.mad_assignment2.ui.BookViewModel
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.flow.distinctUntilChanged
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.KeyboardType
 class MainActivity : ComponentActivity() {
-
-    // ViewModel (exists in com.example.mad_assignment2.ui)
-    private val vm: BookViewModel by viewModels()
+    private val bookVm: BookViewModel by viewModels()
+    private val authVm: AuthViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        FirebaseFirestore.setLoggingEnabled(true)
+
         setContent {
-            // Material3 app theme from themes.xml
             MaterialTheme {
-                App(vm)
+                AppWithAuth(bookVm, authVm)
             }
         }
     }
 }
 
-@Composable
-fun App(vm: BookViewModel) {
-    val config = LocalConfiguration.current
-    val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
+/* ----------------------------- AUTH SHELL ----------------------------- */
 
-    if (isLandscape) {
-        LandscapeHome(vm)   // NavigationRail layout
-    } else {
-        PortraitHome(vm)    // Current top tabs layout kept intact
+@Composable
+fun AppWithAuth(bookVm: BookViewModel, authVm: AuthViewModel) {
+    val ui by authVm.ui.collectAsState()
+    var showAuthDialog by rememberSaveable { mutableStateOf(false) }
+
+    if (ui.loading && ui.userEmail == null && !ui.isAnon) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        AnonymousBanner(authVm) { showAuthDialog = true }
+        App(bookVm, authVm)
+    }
+
+    if (showAuthDialog) {
+        AuthDialog(authVm = authVm, onDismiss = { showAuthDialog = false })
     }
 }
 
 @Composable
-private fun PortraitHome(vm: BookViewModel) {
+fun AnonymousBanner(authVm: AuthViewModel, onCreateAccountClick: () -> Unit) {
+    val ui by authVm.ui.collectAsState()
+    if (!ui.isAnon) return
+
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("You're browsing as a guest", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Create an account to sync your library across reinstalls",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = onCreateAccountClick) { Text("Create Account") }
+        }
+    }
+}
+
+@Composable
+fun AuthDialog(authVm: AuthViewModel, onDismiss: () -> Unit) {
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var isCreateMode by remember { mutableStateOf(true) }
+    val ui by authVm.ui.collectAsState()
+
+    LaunchedEffect(ui.userEmail, ui.isAnon) {
+        if (ui.userEmail != null && !ui.isAnon) onDismiss()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isCreateMode) "Create Account" else "Sign In") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("Email") },
+                    enabled = !ui.loading,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    enabled = !ui.loading,
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (ui.error != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(ui.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(12.dp))
+                TextButton(onClick = { isCreateMode = !isCreateMode }, enabled = !ui.loading) {
+                    Text(if (isCreateMode) "Already have an account? Sign in" else "Don't have an account? Create one")
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (isCreateMode && ui.isAnon) authVm.linkAnonToEmail(email, password)
+                    else authVm.signIn(email, password)
+                },
+                enabled = !ui.loading && email.isNotBlank() && password.isNotBlank()
+            ) {
+                if (ui.loading) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = MaterialTheme.colorScheme.onPrimary)
+                } else {
+                    Text(if (isCreateMode) "Create" else "Sign In")
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !ui.loading) { Text("Cancel") } }
+    )
+}
+
+/* --------------------------- MAIN APP SHELL --------------------------- */
+
+@Composable
+fun App(bookVm: BookViewModel, authVm: AuthViewModel) {
+    val config = LocalConfiguration.current
+    val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
+    if (isLandscape) LandscapeHome(bookVm) else PortraitHome(bookVm, authVm)
+}
+
+@Composable
+private fun PortraitHome(bookVm: BookViewModel, authVm: AuthViewModel) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
+    var showMenu by remember { mutableStateOf(false) }
+    val ui by authVm.ui.collectAsState()
 
     Scaffold(
         topBar = {
-            // keeping normal TopAppBar when in portrait
-            TopAppBar(title = { Text("Pocket Library") })
+            TopAppBar(
+                title = { Text("Pocket Library") },
+                actions = {
+                    IconButton(onClick = { showMenu = true }) { Text("⋮", style = MaterialTheme.typography.headlineMedium) }
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        if (ui.isAnon) {
+                            DropdownMenuItem(text = { Text("Create Account…") }, onClick = { showMenu = false; /* open banner button */ })
+                        } else {
+                            DropdownMenuItem(text = { Text("Signed in as ${ui.userEmail}") }, onClick = {}, enabled = false)
+                            DropdownMenuItem(text = { Text("Sign Out") }, onClick = { showMenu = false; authVm.signOut() })
+                        }
+                    }
+                }
+            )
         }
     ) { inner ->
         Column(Modifier.padding(inner)) {
-            // keep current TabRow
             TabRow(selectedTabIndex = selected) {
                 Tab(selected = selected == 0, onClick = { selected = 0 }, text = { Text("Search") })
                 Tab(selected = selected == 1, onClick = { selected = 1 }, text = { Text("My Library") })
             }
-            if (selected == 0) SearchTab(vm) else LibraryTab(vm)
+            if (selected == 0) SearchTab(bookVm) else LibraryTab(bookVm)
         }
     }
 }
+
+/* ------------------------------ SEARCH UI ----------------------------- */
+
+@Composable
+fun SearchTab(vm: BookViewModel) {
+    val query by vm.query.collectAsState()
+    val results by vm.remote.collectAsState()
+    val savedIds by vm.savedIds.collectAsState()
+    val err by vm.error.collectAsState()
+    var manualOpen by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        // IME action triggers remote search too
+        OutlinedTextField(
+            value = query,
+            onValueChange = { vm.onSearchQueryChanged(it) },
+            label = { Text("Title or Author") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = { vm.doRemoteSearch() }
+            )
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = vm::doRemoteSearch, enabled = query.isNotBlank(), modifier = Modifier.weight(1f)) {
+                Text("Search Online")
+            }
+            OutlinedButton(onClick = { manualOpen = true }, modifier = Modifier.weight(1f)) {
+                Text("Add Manually")
+            }
+        }
+
+        if (err != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(err!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Simple, reliable list with stable keys
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+            items(results, key = { it.id }) { book ->
+                val isSaved = book.id in savedIds
+                BookRow(
+                    book = book,
+                    isSaved = isSaved,
+                    onToggleSave = { currentlySaved -> if (currentlySaved) vm.remove(book) else vm.save(book) }
+                )
+            }
+        }
+    }
+
+    if (manualOpen) {
+        ManualAddDialog(
+            onDismiss = { manualOpen = false },
+            onAdd = { vm.save(it); manualOpen = false }
+        )
+    }
+}
+
+
+/* ------------------------------ LIBRARY UI ---------------------------- */
+
+@Composable
+fun LibraryTab(vm: BookViewModel) {
+    val q by vm.localQuery.collectAsState()
+    val items by vm.localBooks.collectAsState()
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        OutlinedTextField(
+            value = q,
+            onValueChange = { vm.localQuery.value = it },
+            label = { Text("Search my library") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No books saved yet", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+                items(items, key = { it.id }) { book ->
+                    BookRow(book = book, onRemove = { vm.remove(it) })
+                }
+            }
+        }
+    }
+}
+
+/* -------------------------- LANDSCAPE/TABLET UI ----------------------- */
 
 @Composable
 private fun LandscapeHome(vm: BookViewModel) {
@@ -101,77 +319,40 @@ private fun LandscapeHome(vm: BookViewModel) {
     val isTablet = config.screenWidthDp >= 600
     var selected by rememberSaveable { mutableIntStateOf(0) }
 
-    Scaffold {
-        inner ->
+    Scaffold { inner ->
         Row(Modifier.padding(inner).fillMaxSize()) {
-
-            // Left-side NavigationRail replaces the top TabRow
-            NavigationRail(modifier = Modifier.fillMaxHeight()) {
-                NavigationRailItem(
-                    selected = selected == 0,
-                    onClick = { selected = 0 },
-                    icon = { Text("S") },
-                    label = { Text("Search") }
-                )
-                NavigationRailItem(
-                    selected = selected == 1,
-                    onClick = { selected = 1 },
-                    icon = { Text("L") },
-                    label = { Text("My Library") }
-                )
+            NavigationRail(Modifier.fillMaxHeight()) {
+                NavigationRailItem(selected = selected == 0, onClick = { selected = 0 }, icon = { Text("S") }, label = { Text("Search") })
+                NavigationRailItem(selected = selected == 1, onClick = { selected = 1 }, icon = { Text("L") }, label = { Text("My Library") })
             }
-
-            // Main content area
-            if (selected == 0) {
-                SearchLandscape(vm, isTablet)
-            } else {
-                LibraryLandscape(vm, isTablet)
-            }
+            if (selected == 0) SearchLandscape(vm, isTablet) else LibraryLandscape(vm, isTablet)
         }
     }
 }
 
 @Composable
 private fun SearchLandscape(vm: BookViewModel, isTablet: Boolean) {
-    val query    by vm.query.collectAsState()
-    val results  by vm.remote.collectAsState()
+    val query by vm.query.collectAsState()
+    val results by vm.remote.collectAsState()
     val savedIds by vm.savedIds.collectAsState()
-    val err      by vm.error.collectAsState()
+    val err by vm.error.collectAsState()
 
-    // TABLET (split pane: grid | details)
     if (isTablet) {
         var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
         val selected = results.firstOrNull { it.id == selectedId } ?: results.firstOrNull() ?: Book.EMPTY
 
         Row(Modifier.fillMaxSize()) {
-
-            // LEFT: grid area
-            Column(
-                modifier = Modifier
-                    .weight(0.65f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                // Small inline title
-                Text(
-                    "Pocket Library",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 6.dp)
-                )
-
-                // Horizontal query row — saves vertical space
+            Column(Modifier.weight(0.65f).fillMaxHeight().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text("Pocket Library", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
-                        value = query,
-                        onValueChange = { vm.onSearchQueryChanged(it) },
-                        label = { Text("Title or Author") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        value = query, onValueChange = { vm.onSearchQueryChanged(it) },
+                        label = { Text("Title or Author") }, singleLine = true, modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { vm.doRemoteSearch() })
                     )
                     Spacer(Modifier.width(8.dp))
-                    Button(onClick = vm::doRemoteSearch, enabled = query.isNotBlank()) {
-                        Text("Search")
-                    }
+                    Button(onClick = vm::doRemoteSearch, enabled = query.isNotBlank()) { Text("Search") }
                 }
                 if (err != null) {
                     Spacer(Modifier.height(6.dp))
@@ -179,7 +360,6 @@ private fun SearchLandscape(vm: BookViewModel, isTablet: Boolean) {
                 }
                 Spacer(Modifier.height(8.dp))
 
-                // Scroll state with save/restore to persist position
                 val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
                 LaunchedEffect(gridState) {
                     snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
@@ -208,53 +388,32 @@ private fun SearchLandscape(vm: BookViewModel, isTablet: Boolean) {
                         BookTile(
                             book = book,
                             isSaved = isSaved,
-                            onToggleSave = { saved ->
-                                if (saved) vm.remove(book) else vm.save(book)
-                            },
-                            onClick = { selectedId = book.id }  // select for details
+                            onToggleSave = { saved -> if (saved) vm.remove(book) else vm.save(book) },
+                            onClick = { selectedId = book.id }
                         )
                     }
                 }
             }
 
-            // RIGHT: details
-            Box(
-                modifier = Modifier
-                    .weight(0.35f)
-                    .fillMaxHeight()
-                    .padding(8.dp)
-            ) {
+            Box(Modifier.weight(0.35f).fillMaxHeight().padding(8.dp)) {
                 BookDetailCard(
                     book = selected,
                     isSaved = selected.id in savedIds,
-                    onToggleSave = { saved ->
-                        if (saved) vm.remove(selected) else vm.save(selected)
-                    }
+                    onToggleSave = { saved -> if (saved) vm.remove(selected) else vm.save(selected) }
                 )
             }
         }
         return
     }
 
-    // PHONE LANDSCAPE (no details pane; just compact grid)
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        Text(
-            "Pocket Library",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
-
+    // Phone landscape fallback: compact grid
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
-                value = query,
-                onValueChange = { vm.onSearchQueryChanged(it) },
-                label = { Text("Title or Author") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
+                value = query, onValueChange = { vm.onSearchQueryChanged(it) },
+                label = { Text("Title or Author") }, singleLine = true, modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { vm.doRemoteSearch() })
             )
             Spacer(Modifier.width(8.dp))
             Button(onClick = vm::doRemoteSearch, enabled = query.isNotBlank()) { Text("Search") }
@@ -290,13 +449,9 @@ private fun SearchLandscape(vm: BookViewModel, isTablet: Boolean) {
         ) {
             itemsIndexed(results, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
                 val isSaved = book.id in savedIds
-                BookTile(
-                    book = book,
-                    isSaved = isSaved,
-                    onToggleSave = { saved ->
-                        if (saved) vm.remove(book) else vm.save(book)
-                    }
-                )
+                BookTile(book = book, isSaved = isSaved, onToggleSave = { saved ->
+                    if (saved) vm.remove(book) else vm.save(book)
+                })
             }
         }
     }
@@ -304,7 +459,7 @@ private fun SearchLandscape(vm: BookViewModel, isTablet: Boolean) {
 
 @Composable
 private fun LibraryLandscape(vm: BookViewModel, isTablet: Boolean) {
-    val q     by vm.localQuery.collectAsState()
+    val q by vm.localQuery.collectAsState()
     val items by vm.localBooks.collectAsState()
 
     if (isTablet) {
@@ -312,21 +467,8 @@ private fun LibraryLandscape(vm: BookViewModel, isTablet: Boolean) {
         val selected = items.firstOrNull { it.id == selectedId } ?: items.firstOrNull() ?: Book.EMPTY
 
         Row(Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .weight(0.65f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = q,
-                        onValueChange = { vm.localQuery.value = it },
-                        label = { Text("Search my library") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+            Column(Modifier.weight(0.65f).fillMaxHeight().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                OutlinedTextField(value = q, onValueChange = { vm.localQuery.value = it }, label = { Text("Search my library") }, singleLine = true)
                 Spacer(Modifier.height(8.dp))
 
                 val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
@@ -353,22 +495,12 @@ private fun LibraryLandscape(vm: BookViewModel, isTablet: Boolean) {
                     modifier = Modifier.fillMaxSize()
                 ) {
                     itemsIndexed(items, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                        BookRow(
-                            book = book,
-                            onRemove = { vm.remove(it) },
-                            onClick = { selectedId = book.id },
-                            compact = true
-                        )
+                        BookRow(book = book, onRemove = { vm.remove(it) }, onClick = { selectedId = book.id }, compact = true)
                     }
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .weight(0.35f)
-                    .fillMaxHeight()
-                    .padding(8.dp)
-            ) {
+            Box(Modifier.weight(0.35f).fillMaxHeight().padding(8.dp)) {
                 BookDetailCard(
                     book = selected,
                     isSaved = true,
@@ -380,21 +512,8 @@ private fun LibraryLandscape(vm: BookViewModel, isTablet: Boolean) {
         return
     }
 
-    // Phone landscape (no details pane)
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = q,
-                onValueChange = { vm.localQuery.value = it },
-                label = { Text("Search my library") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-        }
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        OutlinedTextField(value = q, onValueChange = { vm.localQuery.value = it }, label = { Text("Search my library") }, singleLine = true)
         Spacer(Modifier.height(8.dp))
 
         val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
@@ -427,42 +546,7 @@ private fun LibraryLandscape(vm: BookViewModel, isTablet: Boolean) {
     }
 }
 
-@Suppress("unused")     // function not used - switched to SearchTab (suppresses warning)
-@Composable
-fun SearchScreen(vm: BookViewModel) {
-    val query by vm.query.collectAsState()
-    val results by vm.remote.collectAsState()
-
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { vm.query.value = it },
-            label = { Text("Title or Author") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        Row { Button(onClick = vm::doRemoteSearch) { Text("Search Online") } }
-
-        Spacer(Modifier.height(12.dp))
-        LazyColumn {
-            items(results) { book ->
-                BookRow(
-                    book = book,
-                    onToggleSave = { vm.save(book) }
-                )
-            }
-        }
-
-        // Manual entry (fallback when offline) — simplified quick add
-        var manualOpen by remember { mutableStateOf(false) }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = { manualOpen = true }) { Text("Add Manually (offline ok)") }
-        if (manualOpen) ManualAddDialog(onDismiss = { manualOpen = false }, onAdd = {
-            vm.save(it); manualOpen = false
-        })
-    }
-}
+/* --------------------------- REUSABLE COMPOSABLES --------------------- */
 
 @Composable
 fun BookTile(
@@ -472,11 +556,8 @@ fun BookTile(
     onRemove: ((Book) -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
-    // Tile layout: cover on top, text lines below
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = onClick != null) { onClick?.invoke() },
+        modifier = Modifier.fillMaxWidth().clickable(enabled = onClick != null) { onClick?.invoke() },
         shape = RoundedCornerShape(16.dp)
     ) {
         Column(Modifier.padding(10.dp)) {
@@ -487,52 +568,23 @@ fun BookTile(
             AsyncImage(
                 model = book.coverUrl,
                 contentDescription = cd,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(3f / 4f)   // Readable cover
-                    .clip(RoundedCornerShape(10.dp)),
+                modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(10.dp)),
                 contentScale = ContentScale.Crop
             )
-
             Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = book.title,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+            Text(book.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (book.author.isNotBlank()) {
-                Text(
-                    text = book.author,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(book.author, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (book.year.isNotBlank()) {
-                Text(
-                    text = book.year,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(book.year, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-
             Spacer(Modifier.height(8.dp))
-
-            // Text never wraps/cuts off.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 when {
-                    onRemove != null -> {
-                        AssistChip(onClick = { onRemove(book) }, label = { Text("Remove") })
-                    }
-                    isSaved -> {
-                        AssistChip(onClick = { onToggleSave(true) }, label = { Text("Unsave") })
-                    }
-                    else -> {
-                        AssistChip(onClick = { onToggleSave(false) }, label = { Text("Save") })
-                    }
+                    onRemove != null -> AssistChip(onClick = { onRemove(book) }, label = { Text("Remove") })
+                    isSaved -> AssistChip(onClick = { onToggleSave(true) }, label = { Text("Unsave") })
+                    else -> AssistChip(onClick = { onToggleSave(false) }, label = { Text("Save") })
                 }
             }
         }
@@ -547,29 +599,20 @@ fun BookRow(
     onToggleSave: (Boolean) -> Unit = {},
     onRemove: ((Book) -> Unit)? = null,
     onClick: (() -> Unit)? = null,
-    // Compact = true for landscape layouts (smaller paddings & controls)
     compact: Boolean = false
 ) {
     val clickMod = if (onClick != null) Modifier.clickable { onClick() } else Modifier
-
-    // Sizes tuned for readability; compact gets smaller image & paddings
     val imageSize = if (compact) 72.dp else 64.dp
     val cardPadding = if (compact) 10.dp else 12.dp
     val titleStyle = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium
-    val bodyStyle  = if (compact) MaterialTheme.typography.bodySmall  else MaterialTheme.typography.bodyMedium
-    val yearStyle  = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium
+    val bodyStyle = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
+    val yearStyle = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium
 
     Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = if (compact) 4.dp else 6.dp)
-            .then(clickMod),
+        modifier = modifier.fillMaxWidth().padding(vertical = if (compact) 4.dp else 6.dp).then(clickMod),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(cardPadding),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(Modifier.padding(cardPadding), verticalAlignment = Alignment.CenterVertically) {
             val coverCd = buildString {
                 append("Cover of ${book.title}")
                 if (book.author.isNotBlank()) append(" by ${book.author}")
@@ -577,37 +620,19 @@ fun BookRow(
             AsyncImage(
                 model = book.coverUrl,
                 contentDescription = coverCd,
-                modifier = Modifier
-                    .size(imageSize)
-                    .clip(RoundedCornerShape(8.dp)),
+                modifier = Modifier.size(imageSize).clip(RoundedCornerShape(8.dp)),
                 contentScale = ContentScale.Crop
             )
 
             Spacer(Modifier.width(if (compact) 10.dp else 12.dp))
 
             Column(Modifier.weight(1f)) {
-                Text(
-                    text = book.title,
-                    style = titleStyle,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(book.title, style = titleStyle, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (book.author.isNotBlank()) {
-                    Text(
-                        text = book.author,
-                        style = bodyStyle,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Text(book.author, style = bodyStyle, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (book.year.isNotBlank()) {
-                    Text(
-                        text = book.year,
-                        style = yearStyle,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text(book.year, style = yearStyle, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -615,7 +640,6 @@ fun BookRow(
 
             when {
                 onRemove != null -> {
-                    // Library action
                     OutlinedButton(
                         onClick = { onRemove(book) },
                         modifier = Modifier.heightIn(min = if (compact) 40.dp else 48.dp),
@@ -623,10 +647,9 @@ fun BookRow(
                         shape = RoundedCornerShape(24.dp)
                     ) { Text("Remove", maxLines = 1, softWrap = false) }
                 }
-                // In compact landscape, if saved, show a tight "Saved ✓"
                 compact && isSaved -> {
                     OutlinedButton(
-                        onClick = { onToggleSave(true) },   // acts as "Unsave" on press
+                        onClick = { onToggleSave(true) },
                         modifier = Modifier.heightIn(min = 40.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         shape = RoundedCornerShape(24.dp)
@@ -641,17 +664,12 @@ fun BookRow(
                         modifier = Modifier.heightIn(min = if (compact) 40.dp else 48.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isSaved) savedBlue else normalContainer,
-                            contentColor   = if (isSaved) Color.White else normalText
+                            contentColor = if (isSaved) Color.White else normalText
                         ),
                         contentPadding = PaddingValues(horizontal = if (compact) 12.dp else 16.dp, vertical = 8.dp),
                         shape = RoundedCornerShape(24.dp)
                     ) {
-                        Text(
-                            text = if (isSaved) "Unsave" else "Save",
-                            style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                        Text(if (isSaved) "Unsave" else "Save", style = MaterialTheme.typography.labelLarge, maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -673,25 +691,12 @@ fun BookDetailCard(
         return
     }
 
-    Card(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(12.dp),
-        shape = RoundedCornerShape(20.dp)
-    ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
+    Card(Modifier.fillMaxSize().padding(12.dp), shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
             AsyncImage(
                 model = book.coverUrl,
                 contentDescription = "Large cover of ${book.title}",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)              // 🔹 clear & readable image
-                    .clip(RoundedCornerShape(12.dp)),
+                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
                 contentScale = ContentScale.Crop
             )
             Spacer(Modifier.height(16.dp))
@@ -714,7 +719,7 @@ fun BookDetailCard(
                         onClick = { onToggleSave(isSaved) },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isSaved) savedBlue else normalContainer,
-                            contentColor   = if (isSaved) Color.White else normalText
+                            contentColor = if (isSaved) Color.White else normalText
                         ),
                         shape = RoundedCornerShape(24.dp)
                     ) { Text(if (isSaved) "Unsave" else "Save") }
@@ -724,438 +729,7 @@ fun BookDetailCard(
     }
 }
 
-
-// Search tab: shows online results in a LazyColumn with stable keys (smooth scroll)
-@Composable
-fun SearchTab(vm: BookViewModel) {
-    val query    by vm.query.collectAsState()
-    val results  by vm.remote.collectAsState()
-    val savedIds by vm.savedIds.collectAsState()
-    val err      by vm.error.collectAsState()
-
-    val config = LocalConfiguration.current
-    val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val isTablet = config.screenWidthDp >= 600
-
-    // Tablet: split layout (list/grid + details)
-    if (isTablet) {
-        var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
-        val selected = results.firstOrNull { it.id == selectedId } ?: results.firstOrNull() ?: Book.EMPTY
-
-        Row(Modifier.fillMaxSize()) {
-            // LEFT PANE: list or grid depending on orientation, with scroll persistence
-            Column(
-                modifier = Modifier
-                    .weight(0.45f)
-                    .fillMaxHeight()
-                    .padding(16.dp)
-            ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { vm.onSearchQueryChanged(it) }, // persists query
-                    label = { Text("Title or Author") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(Modifier.height(8.dp))
-                Row {
-                    Button(onClick = vm::doRemoteSearch, enabled = query.isNotBlank()) {
-                        Text("Search Online")
-                    }
-                }
-
-                if (err != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(err!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                if (isLandscape) {
-                    // --- GRID (landscape tablet) ---
-                    val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
-
-                    // Save scroll
-                    LaunchedEffect(gridState) {
-                        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
-                            .distinctUntilChanged()
-                            .collect { (i, o) -> vm.saveSearchScroll(i, o) }
-                    }
-                    // Restore after data loads
-                    var restored by remember { mutableStateOf(false) }
-                    LaunchedEffect(results) {
-                        if (!restored && results.isNotEmpty()) {
-                            val (i, o) = vm.readSearchScroll()
-                            if (i in 0 until results.size) gridState.scrollToItem(i, o)
-                            restored = true
-                        }
-                    }
-
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        state = gridState,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        itemsIndexed(results, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                            val isSaved = book.id in savedIds
-                            BookRow(
-                                book = book,
-                                isSaved = isSaved,
-                                onToggleSave = { saved -> if (saved) vm.remove(book) else vm.save(book) },
-                                onClick = { selectedId = book.id } // open in right pane
-                            )
-                        }
-                    }
-                } else {
-                    // LIST (portrait tablet)
-                    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-
-                    LaunchedEffect(listState) {
-                        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-                            .distinctUntilChanged()
-                            .collect { (i, o) -> vm.saveSearchScroll(i, o) }
-                    }
-                    var restored by remember { mutableStateOf(false) }
-                    LaunchedEffect(results) {
-                        if (!restored && results.isNotEmpty()) {
-                            val (i, o) = vm.readSearchScroll()
-                            if (i in 0 until results.size) listState.scrollToItem(i, o)
-                            restored = true
-                        }
-                    }
-
-                    LazyColumn(
-                        state = listState,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        itemsIndexed(results, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                            val isSaved = book.id in savedIds
-                            BookRow(
-                                book = book,
-                                isSaved = isSaved,
-                                onToggleSave = { saved -> if (saved) vm.remove(book) else vm.save(book) },
-                                onClick = { selectedId = book.id }
-                            )
-                        }
-                    }
-                }
-            }
-
-            // RIGHT PANE: details
-            Box(
-                modifier = Modifier
-                    .weight(0.55f)
-                    .fillMaxHeight()
-                    .padding(8.dp)
-            ) {
-                BookDetailCard(
-                    book = selected,
-                    isSaved = selected.id in savedIds,
-                    onToggleSave = { saved -> if (saved) vm.remove(selected) else vm.save(selected) }
-                )
-            }
-        }
-        return
-    }
-
-    // PHONE: portrait = list, landscape = two-column grid
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { vm.onSearchQueryChanged(it) }, // persists query
-            label = { Text("Title or Author") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(8.dp))
-        Row { Button(onClick = vm::doRemoteSearch, enabled = query.isNotBlank()) { Text("Search Online") } }
-
-        if (err != null) {
-            Spacer(Modifier.height(8.dp))
-            Text(err!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        if (isLandscape) {
-            // GRID on phone landscape
-            val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
-
-            LaunchedEffect(gridState) {
-                snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
-                    .distinctUntilChanged()
-                    .collect { (i, o) -> vm.saveSearchScroll(i, o) }
-            }
-            var restored by remember { mutableStateOf(false) }
-            LaunchedEffect(results) {
-                if (!restored && results.isNotEmpty()) {
-                    val (i, o) = vm.readSearchScroll()
-                    if (i in 0 until results.size) gridState.scrollToItem(i, o)
-                    restored = true
-                }
-            }
-
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                state = gridState,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                itemsIndexed(results, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                    val isSaved = book.id in savedIds
-                    BookRow(
-                        book = book,
-                        isSaved = isSaved,
-                        onToggleSave = { saved -> if (saved) vm.remove(book) else vm.save(book) }
-                    )
-                }
-            }
-        } else {
-            // LIST on phone portrait
-            val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-
-            LaunchedEffect(listState) {
-                snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-                    .distinctUntilChanged()
-                    .collect { (i, o) -> vm.saveSearchScroll(i, o) }
-            }
-            var restored by remember { mutableStateOf(false) }
-            LaunchedEffect(results) {
-                if (!restored && results.isNotEmpty()) {
-                    val (i, o) = vm.readSearchScroll()
-                    if (i in 0 until results.size) listState.scrollToItem(i, o)
-                    restored = true
-                }
-            }
-
-            LazyColumn(
-                state = listState,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                itemsIndexed(results, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                    val isSaved = book.id in savedIds
-                    BookRow(
-                        book = book,
-                        isSaved = isSaved,
-                        onToggleSave = { saved -> if (saved) vm.remove(book) else vm.save(book) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-// Library tab: shows local (Room) books in a LazyColumn with stable keys
-@Composable
-fun LibraryTab(vm: BookViewModel) {
-    val q      by vm.localQuery.collectAsState()
-    val items  by vm.localBooks.collectAsState()
-
-    val config = LocalConfiguration.current
-    val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val isTablet = config.screenWidthDp >= 600
-
-    if (isTablet) {
-        var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
-        val selected = items.firstOrNull { it.id == selectedId } ?: items.firstOrNull() ?: Book.EMPTY
-
-        Row(Modifier.fillMaxSize()) {
-            // LEFT PANE: filter + list/grid with scroll persistence
-            Column(
-                modifier = Modifier
-                    .weight(0.45f)
-                    .fillMaxHeight()
-                    .padding(16.dp)
-            ) {
-                OutlinedTextField(
-                    value = q,
-                    onValueChange = { vm.localQuery.value = it },
-                    label = { Text("Search my library") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(Modifier.height(8.dp))
-
-                if (isLandscape) {
-                    val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
-                    LaunchedEffect(gridState) {
-                        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
-                            .distinctUntilChanged()
-                            .collect { (i, o) -> vm.saveLibScroll(i, o) }
-                    }
-                    var restored by remember { mutableStateOf(false) }
-                    LaunchedEffect(items) {
-                        if (!restored && items.isNotEmpty()) {
-                            val (i, o) = vm.readLibScroll()
-                            if (i in 0 until items.size) gridState.scrollToItem(i, o)
-                            restored = true
-                        }
-                    }
-
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        state = gridState,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        itemsIndexed(items, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                            BookRow(
-                                book = book,
-                                onRemove = { vm.remove(it) },
-                                onClick = { selectedId = book.id }
-                            )
-                        }
-                    }
-                } else {
-                    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-                    LaunchedEffect(listState) {
-                        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-                            .distinctUntilChanged()
-                            .collect { (i, o) -> vm.saveLibScroll(i, o) }
-                    }
-                    var restored by remember { mutableStateOf(false) }
-                    LaunchedEffect(items) {
-                        if (!restored && items.isNotEmpty()) {
-                            val (i, o) = vm.readLibScroll()
-                            if (i in 0 until items.size) listState.scrollToItem(i, o)
-                            restored = true
-                        }
-                    }
-
-                    LazyColumn(
-                        state = listState,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        itemsIndexed(items, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                            BookRow(
-                                book = book,
-                                onRemove = { vm.remove(it) },
-                                onClick = { selectedId = book.id }
-                            )
-                        }
-                    }
-                }
-            }
-
-            // RIGHT PANE: details (Library uses "Remove")
-            Box(
-                modifier = Modifier
-                    .weight(0.55f)
-                    .fillMaxHeight()
-                    .padding(8.dp)
-            ) {
-                BookDetailCard(
-                    book = selected,
-                    isSaved = true, // it’s in My Library by definition
-                    onToggleSave = { saved -> if (!saved) vm.remove(selected) }, // Unsave acts like Remove
-                    onRemove = { vm.remove(selected) }
-                )
-            }
-        }
-        return
-    }
-
-    // PHONE
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        OutlinedTextField(
-            value = q,
-            onValueChange = { vm.localQuery.value = it },
-            label = { Text("Search my library") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        if (isLandscape) {
-            val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
-            LaunchedEffect(gridState) {
-                snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
-                    .distinctUntilChanged()
-                    .collect { (i, o) -> vm.saveLibScroll(i, o) }
-            }
-            var restored by remember { mutableStateOf(false) }
-            LaunchedEffect(items) {
-                if (!restored && items.isNotEmpty()) {
-                    val (i, o) = vm.readLibScroll()
-                    if (i in 0 until items.size) gridState.scrollToItem(i, o)
-                    restored = true
-                }
-            }
-
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                state = gridState,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                itemsIndexed(items, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                    BookRow(book, onRemove = { vm.remove(it) })
-                }
-            }
-        } else {
-            val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-            LaunchedEffect(listState) {
-                snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-                    .distinctUntilChanged()
-                    .collect { (i, o) -> vm.saveLibScroll(i, o) }
-            }
-            var restored by remember { mutableStateOf(false) }
-            LaunchedEffect(items) {
-                if (!restored && items.isNotEmpty()) {
-                    val (i, o) = vm.readLibScroll()
-                    if (i in 0 until items.size) listState.scrollToItem(i, o)
-                    restored = true
-                }
-            }
-
-            LazyColumn(
-                state = listState,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                itemsIndexed(items, key = { idx, b -> "${b.id}#$idx" }) { _, book ->
-                    BookRow(book, onRemove = { vm.remove(it) })
-                }
-            }
-        }
-    }
-}
-
-
-@Suppress("unused")     // function not used - switched to LibraryTab (suppresses warning)
-@Composable
-fun LibraryScreen(vm: BookViewModel) {
-    val q by vm.localQuery.collectAsState()
-    val libraryItems by vm.localBooks.collectAsState()
-
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        OutlinedTextField(
-            value = q,
-            onValueChange = { vm.localQuery.value = it },
-            label = { Text("Search my library") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(12.dp))
-        LazyColumn {
-            items(libraryItems) { book ->                // calls the DSL function
-                BookRow(book, onRemove = { vm.remove(it) })
-            }
-        }
-    }
-}
+/* ---------------------------- MANUAL ADD ------------------------------ */
 
 @Composable
 fun ManualAddDialog(onDismiss: () -> Unit, onAdd: (Book) -> Unit) {
@@ -1165,6 +739,16 @@ fun ManualAddDialog(onDismiss: () -> Unit, onAdd: (Book) -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        title = { Text("Add Book Manually") },
+        text = {
+            Column {
+                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Title") })
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = author, onValueChange = { author = it }, label = { Text("Author") })
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = year, onValueChange = { year = it }, label = { Text("Year (optional)") })
+            }
+        },
         confirmButton = {
             TextButton(
                 enabled = title.isNotBlank() && author.isNotBlank(),
@@ -1174,14 +758,6 @@ fun ManualAddDialog(onDismiss: () -> Unit, onAdd: (Book) -> Unit) {
                 }
             ) { Text("Add") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        title = { Text("Add Book Manually") },
-        text = {
-            Column {
-                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Title") })
-                OutlinedTextField(value = author, onValueChange = { author = it }, label = { Text("Author") })
-                OutlinedTextField(value = year, onValueChange = { year = it }, label = { Text("Year (optional)") })
-            }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }

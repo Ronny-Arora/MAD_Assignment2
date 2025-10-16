@@ -9,6 +9,8 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
 object NetworkModule {
+
+    // Log network requests/responses
     private val logging = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BODY
     }
@@ -17,16 +19,15 @@ object NetworkModule {
         .addInterceptor(logging)
         .build()
 
-    // Moshi with Kotlin adapter so nullable/defaults work
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
 
     val openLibrary: OpenLibraryApi by lazy {
         Retrofit.Builder()
-            .baseUrl("https://openlibrary.org/")              // ← MUST end with /
+            .baseUrl("https://openlibrary.org/") // must end with /
             .client(client)
-            .addConverterFactory(MoshiConverterFactory.create(moshi)) // ← REQUIRED
+            .addConverterFactory(MoshiConverterFactory.create(moshi)) // converter registered
             .build()
             .create(OpenLibraryApi::class.java)
     }

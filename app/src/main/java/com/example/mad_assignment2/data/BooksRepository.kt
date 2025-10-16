@@ -1,62 +1,59 @@
 package com.example.mad_assignment2.data
 
 import android.content.Context
-import androidx.room.Query
+import com.example.mad_assignment2.data.cloud.CloudSync
 import com.example.mad_assignment2.data.local.AppDb
 import com.example.mad_assignment2.data.local.toEntity
+import com.example.mad_assignment2.data.local.toDomain
 import com.example.mad_assignment2.data.model.Book
 import com.example.mad_assignment2.data.model.toBook
 import com.example.mad_assignment2.data.remote.OpenLibraryApi
-import com.example.mad_assignment2.data.cloud.CloudSync
-import com.example.mad_assignment2.data.local.toDomain
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-class BooksRepository (
+/** Bridges Local (Room) + Cloud (Firestore) + Remote (OpenLibrary). */
+class BooksRepository(
     context: Context,
     private val api: OpenLibraryApi
 ) {
-    private val db = AppDb.get(context)
+    private val db    = AppDb.get(context)
+    private val dao   = db.books()
     private val cloud = CloudSync(db)
 
-    // Expose all books as domain models for UI (Room -> Flow<List<Book>>)
-    val allBooks: Flow<List<Book>> = db.books().all().map { it.map { e -> e.toDomain() } }
+    /** Stream of all locally saved books for UI. */
+    val allBooks: Flow<List<Book>> =
+        dao.all().map { rows -> rows.map { it.toDomain() } }
 
     fun searchLocal(q: String): Flow<List<Book>> =
-        db.books().search(q).map { it.map { e -> e.toDomain() } }
+        dao.search(q).map { rows -> rows.map { it.toDomain() } }
 
-    // Search remote API (OpenLibrary) and convert Doc -> Book for UI
+    /** OpenLibrary search → domain models. */
     suspend fun searchRemote(query: String): List<Book> =
-        api.search(query).docs.map {it.toBook()}
+        api.search(query).docs.map { it.toBook() }
 
-    // Save locally (dirty=true) - try push to cloud (if offline, push fails silently)
+    /** Save/update locally (dirty=true) then push to cloud. */
     suspend fun save(book: Book) {
-        db.books().upsert(book.copy(dirty = true).toEntity())
-        cloud.push(book)    // marks dirty=false if cloud write succeeds
-    }
-
-    // Update locally (dirty=true) and try cloud
-    suspend fun update(book: Book) {
-        db.books().upsert(book.copy(dirty = true).toEntity())
+        dao.upsert(book.copy(dirty = true).toEntity())
         cloud.push(book)
     }
 
-    // Remove locally and try to delete in cloud (delete is best-effort)
+    suspend fun update(book: Book) {
+        dao.upsert(book.copy(dirty = true).toEntity())
+        cloud.push(book)
+    }
+
+    /** Remove locally and try to delete from cloud (best-effort). */
     suspend fun remove(book: Book) {
-        db.books().delete(book.toEntity())
+        dao.deleteById(book.id)
         cloud.delete(book.id)
     }
 
-    // One shot pull from cloud, merging into local (used on fresh install / second device)
+    /** One-shot pull cloud → local (used on first launch / second device). */
     fun restoreFromCloudOnce() = cloud.pullOnceMerge()
 
-    // Uploading all locally dirty rows (used by auto-sync loop)
+    /** Push all locally dirty rows (used by your periodic sync loop). */
     suspend fun syncDirtyNow() {
-        val dirty = db.books().dirtyOnes()
-        for (row in dirty) {
-            cloud.push(row.toDomain())
-        }
+        val dirty = dao.dirtyOnes()
+        for (row in dirty) cloud.push(row.toDomain())
     }
-
-
 }

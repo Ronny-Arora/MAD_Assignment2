@@ -86,24 +86,24 @@ class BookViewModel (app: Application) : AndroidViewModel(app) {
 
     // Fire remote search safely; de-duplicate to avoid LazyColumn key collisions
     fun doRemoteSearch() = viewModelScope.launch {
-            val q = query.value.trim()
-            if (q.isEmpty()) {
-                _remote.value = emptyList()
-                error.value = null
-                return@launch
-            }
-            try {
-                val list = repo.searchRemote(q)
-                _remote.value = list.distinctBy { it.id }   // keep first of same-id results
-                error.value = null
-            } catch (e: UnknownHostException) {
-                _remote.value = emptyList()
-                error.value = "No internet connection."
-            } catch (e: Exception) {
-                _remote.value = emptyList()
-                error.value = "Search failed: ${e.javaClass.simpleName}"
-            }
+        val q = query.value.trim()
+        if (q.isEmpty()) {
+            _remote.value = emptyList()
+            error.value = null
+            return@launch
         }
+        try {
+            val list = repo.searchRemote(q)
+            _remote.value = list.distinctBy { it.id }   // keep first of same-id results
+            error.value = null
+        } catch (e: UnknownHostException) {
+            _remote.value = emptyList()
+            error.value = "No internet connection."
+        } catch (e: Exception) {
+            _remote.value = emptyList()
+            error.value = "Search failed: ${e.javaClass.simpleName}"
+        }
+    }
 
     // Persist scroll (Search & Library)
     // Called by UI as the list scrolls
