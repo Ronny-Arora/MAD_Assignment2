@@ -130,4 +130,12 @@ class BookViewModel (app: Application) : AndroidViewModel(app) {
     }
 
     fun restoreCloudOnce() {repo.restoreFromCloudOnce()}
+
+    // Attach/replace a personal cover photo for a saved book.
+    // Stores a content:// URI string and marks the row dirty so CloudSync can push it.
+    fun attachPhoto(book: Book, uriString: String) = viewModelScope.launch {
+        val updated = book.copy(photoUri = uriString, dirty = true)
+        repo.update(updated)
+    }
+
 }
